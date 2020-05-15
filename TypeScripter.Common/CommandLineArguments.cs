@@ -10,5 +10,8 @@
 		public const string ClassNames = "--class";
 		public const string NewHttp = "--httpclient";
 		public const string CombineImports = "--combineimports";
-	}
+        public const string GenerateSchemaJson = "--generateSchemaJson";
+        public const string SchemaFilePath = "--schemaFilePath";
+		public const string Generator = "--generator";
+    }
 }

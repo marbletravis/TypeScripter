@@ -4,25 +4,23 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using TypeScripter.Common.Generators;
 
-namespace TypeScripter.Common.Generators
+namespace TypeScripter.Common
 {
-	public static class DataServiceGenerator
+	internal class PromiseDataServiceGenerator
 	{
-		public static string HttpClient = "HttpClientModule";
 
 		public static List<string> Generate(List<Type> apiControllers, HashSet<Type> models, string targetPath, Options options)
 		{
-		  var apiRelativePath = options.ApiRelativePath;
-		  var httpModule = HttpClient;
-		  var combineImports = options.CombineImports ?? false;
-		  var handleErrors = options.HandleErrors ?? false;
-      
-      if (string.IsNullOrWhiteSpace(apiRelativePath))
+			var apiRelativePath = options.ApiRelativePath;
+			var combineImports = options.CombineImports ?? true;
+
+			if (string.IsNullOrWhiteSpace(apiRelativePath))
 			{
 				return new List<string>();
 			}
-            
+
 			if (options.ApiRelativePath.EndsWith("/"))
 			{
 				apiRelativePath = apiRelativePath.Substring(0, apiRelativePath.Length - 1);
@@ -32,10 +30,6 @@ namespace TypeScripter.Common.Generators
 
 			sb.AppendLine("// tslint:disable:max-line-length");
 			sb.AppendLine("// tslint:disable:member-ordering");
-			sb.AppendLine("import { Injectable } from '@angular/core';");
-			sb.AppendLine(httpModule == HttpClient ? "import { HttpClient, HttpErrorResponse } from '@angular/common/http';" : "import { Http, Response } from '@angular/http';");
-			sb.AppendLine("import { Observable, throwError } from 'rxjs';");
-			sb.AppendLine("import { map, catchError } from 'rxjs/operators';");
 			sb.AppendLine("import * as moment from 'moment';");
 
 			var startingImport = "import {";
@@ -54,15 +48,27 @@ namespace TypeScripter.Common.Generators
 			{
 				foreach (var m in models.OrderBy(m => m.Name))
 				{
-					sb.AppendLine(string.Format("{0} {1} {2}", startingImport, m.Name, endingImport));
+					sb.AppendLine($"import {{ {m.Name}, {m.Name}_fromJsonObj }} from '.'");
 				}
 			}
 			sb.AppendLine("");
 
-			sb.AppendLine("@Injectable()");
+
+			sb.AppendLine(@"export interface ITypescripterHttpClient {
+	get<T>(path: string, params?: { [k: string]: string | number }, opts?: { responseType: 'text' }): Promise<T>;
+	post<T>(path: string, body: any, opts?: { responseType: 'text' }): Promise<T>;
+	put<T>(path: string, body: any, opts?: { responseType: 'text' }): Promise<T>;
+	delete<T>(path: string, params?: { [k: string]: string | number }, opts?: { responseType: 'text' }): Promise<T>;
+}");
+
+
+
+
+	sb.AppendLine("");
+
 			sb.AppendLine("export class DataService {");
 
-			sb.AppendLine(httpModule == HttpClient ? "\tconstructor(private http: HttpClient) {}" : "\tconstructor(private http: Http) {}");
+			sb.AppendLine("\tconstructor(private http: ITypescripterHttpClient) {}");
 			sb.AppendLine();
 			sb.AppendLine(string.Format("\tapiRelativePath: string = '{0}';", apiRelativePath));
 			sb.AppendLine();
@@ -70,7 +76,7 @@ namespace TypeScripter.Common.Generators
 			int methodCount = 0;
 
 
-            foreach (var apiController in apiControllers.OrderBy(c => c.Name))
+			foreach (var apiController in apiControllers.OrderBy(c => c.Name))
 			{
 				sb.AppendFormat("\t{0} = {{{1}", apiController.Name.Substring(0, apiController.Name.Length - "Controller".Length).Camelize(), Environment.NewLine);
 
@@ -91,27 +97,27 @@ namespace TypeScripter.Common.Generators
 					var httpMethodName = GetHttpMethodName(method);
 					if (httpMethodName == null) { continue; }
 
-		            const string clientMethodTemplate = "\t\t{0}: ({1}): Observable<{2}> => this.http.{3}{4}(`{5}`{6}{7}.{8},";
-				    var returnType = method.ReturnType.ToTypeScriptType();
-                    
-				    if (httpMethodName != "post")
+					const string clientMethodTemplate = "\t\t{0}: ({1}): Promise<{2}> => this.http.{3}{4}(`{5}`{6}{7}{8},";
+					var returnType = method.ReturnType.ToTypeScriptType();
+
+					if (httpMethodName != "post")
 					{
 						if (parameters.Length > 0)
 						{
 							url = url + "?" + string.Join("&", parameters.Select(GenerateGetString));
 						}
 
-                        sb.AppendFormat(clientMethodTemplate, 
-						    /*0*/method.Name.Camelize(), 
-						    /*1*/joinedParameters, 
-						    /*2*/returnType, 
-						    /*3*/httpMethodName, 
-						    /*4*/AddReturnType(returnType), 
-						    /*5*/url, 
-						    /*6*/"", 
-						    /*7*/AddResponseType(returnType),
-                            /*8*/DataServiceGeneratorUtils.GetPipeString(method.ReturnType)
-                        );
+						sb.AppendFormat(clientMethodTemplate,
+							/*0*/method.Name.Camelize(),
+							/*1*/joinedParameters,
+							/*2*/returnType,
+							/*3*/httpMethodName,
+							/*4*/AddReturnType(returnType),
+							/*5*/url,
+							/*6*/"",
+							/*7*/AddResponseType(returnType),
+							/*8*/GetCallConstructorStr(method.ReturnType)
+						);
 						sb.AppendLine();
 					}
 					else
@@ -121,46 +127,24 @@ namespace TypeScripter.Common.Generators
 							Console.WriteLine("/* WARNING! Only POST methods with a zero or one parameter are currently supported -- {0}.{1} */", method.DeclaringType, method.Name);
 						}
 
-					    sb.AppendFormat(clientMethodTemplate,
-					        /*0*/method.Name.Camelize(),
-					        /*1*/joinedParameters,
-					        /*2*/returnType,
-					        /*3*/httpMethodName,
-					        /*4*/AddReturnType(returnType),
-					        /*5*/url,
-                            /*6*/parameters.Length > 0 ? ", " + parameters[0].Name : ", null",
-					        /*7*/AddResponseType(returnType),
-                            /*8*/DataServiceGeneratorUtils.GetPipeString(method.ReturnType)
-                        );
-                        sb.AppendLine();
+						sb.AppendFormat(clientMethodTemplate,
+							/*0*/method.Name.Camelize(),
+							/*1*/joinedParameters,
+							/*2*/returnType,
+							/*3*/httpMethodName,
+							/*4*/AddReturnType(returnType),
+							/*5*/url,
+							/*6*/parameters.Length > 0 ? ", " + parameters[0].Name : ", null",
+							/*7*/AddResponseType(returnType),
+							/*8*/GetCallConstructorStr(method.ReturnType)
+						);
+						sb.AppendLine();
 					}
 				}
 				sb.AppendLine("\t};");
 			}
 
 			sb.AppendLine();
-			sb.AppendLine("\tprivate handleError(error: HttpErrorResponse | any) {");
-		  if (handleErrors)
-		  {
-		    sb.AppendLine("\t\tlet errMsg: string;");
-
-		  sb.AppendLine("\t\tif (error instanceof HttpErrorResponse) {");
-		  sb.AppendLine("\t\t\tconst hdr = error.headers.get('ExceptionMessage');");
-		  sb.AppendLine(
-		    "\t\t\terrMsg = `${error.status}${hdr ? ' - ' + hdr : ''} - ${error.statusText || ''} ${error.error}`;");
-		  sb.AppendLine("\t\t} else {");
-		  sb.AppendLine("\t\t\terrMsg = error.message ? error.message : error.toString();");
-		  sb.AppendLine("\t\t}");
-
-		    sb.AppendLine("\t\tconsole.error(errMsg);");
-		    sb.AppendLine("\t\treturn throwError(errMsg);");
-		  }
-		  else
-		  {
-		    sb.AppendLine("\t\treturn throwError(error);");
-          }
-
-		  sb.AppendLine("\t}");
 			sb.AppendLine("}");
 
 			Utils.WriteIfChanged(sb.ToString(), Path.Combine(targetPath, "DataService.ts"));
@@ -168,7 +152,12 @@ namespace TypeScripter.Common.Generators
 			return new List<string> { "DataService" };
 		}
 
-        internal class ParameterEssentials
+		private static object ImportsTemplate()
+		{
+			throw new NotImplementedException();
+		}
+
+		private class ParameterEssentials
 		{
 			public string Name { get; set; }
 			public Type ParameterType { get; set; }
@@ -185,13 +174,13 @@ namespace TypeScripter.Common.Generators
 			}
 		}
 
-		private static readonly HashSet<string> _primitiveTypes = new HashSet<string>{"boolean", "boolean[]", "number", "number[]", "string", "string[]", "moment.Moment" };
-		
-		internal static ParameterEssentials[] ExpandFromUriParameters(ParameterInfo[] parameters)
+		private static readonly HashSet<string> _primitiveTypes = new HashSet<string> { "boolean", "boolean[]", "number", "number[]", "string", "string[]" };
+
+		private static ParameterEssentials[] ExpandFromUriParameters(ParameterInfo[] parameters)
 		{
 			Func<ParameterEssentials, bool> isPrimitive = p => _primitiveTypes.Contains(p.ParameterType.ToTypeScriptType().Name);
 			Func<ParameterEssentials, bool> isBareParameter = p => isPrimitive(p) || !p.Attributes.Any(_ => _.Name == "FromUriAttribute");
-			
+
 			var bareParameters = parameters
 				.Select(ParameterEssentials.FromParameterInfo)
 				.Where(p => isBareParameter(p))
@@ -217,14 +206,14 @@ namespace TypeScripter.Common.Generators
 
 		private static string AddResponseType(TypeDetails typeDetails)
 		{
-			if (typeDetails.Name == "boolean" || typeDetails.Name == "string" || typeDetails.ToString() == "number")
-			{
-				string convert = "x";
-				if (typeDetails.Name == "boolean") { convert = "JSON.parse(x) === true"; }
-				else if (typeDetails.Name == "number") { convert = "Number(x)"; }
-				string map = String.Format(".pipe(map( x => {0}))", convert);
-				return ", { responseType: 'text' })" + map;
-			}
+			//if (typeDetails.Name == "boolean" || typeDetails.Name == "string" || typeDetails.ToString() == "number")
+			//{
+			//	string convert = "x";
+			//	if (typeDetails.Name == "boolean") { convert = "JSON.parse(x) === true"; }
+			//	else if (typeDetails.Name == "number") { convert = "Number(x)"; }
+			//	string map = String.Format(".then( x => {0})", convert);
+			//	return ", { responseType: 'text' })" + map;
+			//}
 			return ")";
 		}
 
@@ -241,13 +230,13 @@ namespace TypeScripter.Common.Generators
 		{
 			if (p.ParameterType == typeof(DateTime))
 			{
-				return string.Format("{0}=${{{0} == null ? '' : {0}.toISOString()}}", p.Name);
+				return string.Format("{0}=${{{0}.toISOString()}}", p.Name);
 			}
 			else if (p.ParameterType.ToTypeScriptType().Name.EndsWith("[]"))
 			{
 				return string.Format("${{{0}.map(x => `{0}=${{x}}`).join('&')}}", p.Name);
 			}
-			return string.Format("{0}=${{{0} == null ? '' : {0}}}", p.Name);
+			return string.Format("{0}=${{{0}}}", p.Name);
 		}
 
 		private static string CombineUri(params string[] parts)
@@ -298,6 +287,26 @@ namespace TypeScripter.Common.Generators
 			Console.WriteLine("WARNING:  The method '{0}.{1}' does not have a recognizable HTTP method.", method.DeclaringType.Name, method.Name);
 
 			return null;
+		}
+
+		public static string GetCallConstructorStr(Type returnType)
+		{
+			string typescriptType = returnType.ToTypeScriptType().Name;
+
+			// Make sure the DTO constructor gets called in the pipeline
+			if (returnType.IsOrContainsModelType())
+			{
+				if (typescriptType.EndsWith("[]"))
+				{
+					var elementType = typescriptType.Substring(0, typescriptType.Length - 2); // Take off the '[]' at the end of the type
+					return $".then(value => value.map(x => {elementType}_fromJsonObj(x)))";
+				}
+				else
+				{
+					return $".then(value => {typescriptType}_fromJsonObj(value))";
+				}
+			}
+			return "";
 		}
 	}
 }
